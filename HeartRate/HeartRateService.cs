@@ -1,10 +1,10 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.GenericAttributeProfile;
 using Windows.Devices.Enumeration;
 using Windows.Foundation;
@@ -12,7 +12,7 @@ using Windows.Storage.Streams;
 
 namespace HeartRate
 {
-    enum ContactSensorStatus
+    public enum ContactSensorStatus
     {
         NotSupported,
         NotSupported2,
@@ -20,7 +20,7 @@ namespace HeartRate
         Contact
     }
 
-    class HeartRateService : IDisposable
+    public class HeartRateService : IDisposable
     {
         // https://www.bluetooth.com/specifications/gatt/viewer?attributeXmlFile=org.bluetooth.characteristic.heart_rate_measurement.xml
         private const int _heartRateMeasurementCharacteristicId = 0x2A37;
@@ -32,8 +32,26 @@ namespace HeartRate
         public event HeartRateUpdateEventHandler HeartRateUpdated;
         public delegate void HeartRateUpdateEventHandler(ContactSensorStatus status, int bpm);
 
+        public String filename;
+
+        public void LogData(HeartRateServiceData data)
+        {
+            String line="";
+            if(!File.Exists(filename))
+            {
+                line += HeartRateServiceData.GetCsVHeader() + Environment.NewLine;
+            }
+            line += data.ToString();
+            using (var streamWriter = new StreamWriter(filename, true))
+            {
+                streamWriter.WriteLine(line);
+            }
+
+        }
+
         public void InitiateDefault()
         {
+            filename = "polar" + DateTime.Now.ToString("yyyyMMddhhmmss") +".csv";
             var heartrateSelector = GattDeviceService
                 .GetDeviceSelectorFromUuid(GattServiceUuids.HeartRate);
 
@@ -64,10 +82,8 @@ namespace HeartRate
                 _service = service;
             }
 
-            var heartrate = service.GetCharacteristics(
-                GattDeviceService.ConvertShortIdToUuid(
-                    _heartRateMeasurementCharacteristicId))
-                .FirstOrDefault();
+            var uuid = BluetoothUuidHelper.FromShortId(_heartRateMeasurementCharacteristicId);
+            var heartrate = AsyncResult(service.GetCharacteristicsForUuidAsync(uuid)).Characteristics.FirstOrDefault();
 
             if (heartrate == null)
             {
@@ -97,9 +113,11 @@ namespace HeartRate
 
             using (var reader = DataReader.FromBuffer(value))
             {
+                byte[] data = new byte[value.Length];
+                reader.ReadBytes(data);
                 var bpm = -1;
-                var flags = reader.ReadByte();
-                var isshort = (flags & 1) == 1;
+                var flags = data[0];
+                var isshort = (flags & 1) == 1; // 1 == UINT16
                 var contactSensor = (ContactSensorStatus)((flags >> 1) & 3);
                 var minLength = isshort ? 3 : 2;
 
@@ -109,14 +127,16 @@ namespace HeartRate
                     return;
                 }
 
-                if (value.Length > 1)
-                {
-                    bpm = isshort
-                        ? reader.ReadUInt16()
-                        : reader.ReadByte();
-                }
+                HeartRateServiceData hrsd = new HeartRateServiceData(data);
+                LogData(hrsd);
+
+                bpm = hrsd.HeartRateMeasurement;
 
                 Debug.WriteLine($"Read {flags.ToString("X")} {contactSensor} {bpm}");
+                foreach(var rr in hrsd.RRIntervals)
+                {
+                    Debug.WriteLine($"RR Interval {rr}");
+                }
 
                 HeartRateUpdated?.Invoke(contactSensor, bpm);
             }
@@ -145,7 +165,7 @@ namespace HeartRate
                 switch (async.Status)
                 {
                     case AsyncStatus.Started:
-                        Thread.Sleep(100);
+                        Thread.Sleep(10);
                         continue;
                     case AsyncStatus.Completed:
                         return async.GetResults();

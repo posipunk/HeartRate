@@ -1,87 +1,49 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
-using System.Linq;
-using System.Runtime.InteropServices;
-using System.Text;
-using System.Threading;
 using System.Windows.Forms;
 
 namespace HeartRate
 {
     public partial class HeartRateForm : Form
     {
-        // Excessively call the main rendering function to force any leaks that
-        // could happen.
-        private const bool _leaktest = false;
-
         private readonly HeartRateService _service;
         private readonly object _disposeSync = new object();
         private readonly object _updateSync = new object();
-        private readonly Bitmap _iconBitmap;
-        private readonly Graphics _iconGraphics;
-        private readonly HeartRateSettings _settings = HeartRateSettings.CreateDefault();
-        private readonly int _iconWidth = GetSystemMetrics(SystemMetric.SmallIconX);
-        private readonly int _iconHeight = GetSystemMetrics(SystemMetric.SmallIconY);
-        private readonly StringFormat _iconStringFormat = new StringFormat {
-            Alignment = StringAlignment.Center,
-            LineAlignment = StringAlignment.Center
-        };
-        private readonly Font _measurementFont;
-        private readonly Stopwatch _alertTimeout = new Stopwatch();
-        private readonly Stopwatch _disconnectedTimeout = new Stopwatch();
-
-        private string _iconText;
-        private Font _lastFont;
-        private IntPtr _oldIconHandle;
-
-        [DllImport("user32.dll")]
-        private static extern int GetSystemMetrics(SystemMetric nIndex);
-
-        [DllImport("user32.dll")]
-        private static extern int SetForegroundWindow(int hWnd);
-
-        [DllImport("user32.dll")]
-        private static extern bool DestroyIcon(IntPtr handle);
-
-        private enum SystemMetric
-        {
-            SmallIconX = 49, // SM_CXSMICON
-            SmallIconY = 50, // SM_CYSMICON
-        }
 
         public HeartRateForm()
         {
-            _settings.Load();
-            _settings.Save();
             _service = new HeartRateService();
-            _iconBitmap = new Bitmap(_iconWidth, _iconHeight);
-            _iconGraphics = Graphics.FromImage(_iconBitmap);
-            _measurementFont = new Font(
-                _settings.FontName, _iconWidth,
-                GraphicsUnit.Pixel);
 
             InitializeComponent();
         }
 
         private void HeartRateForm_Load(object sender, EventArgs e)
         {
-            UpdateLabelFont();
-            Hide();
-
-            try
+            String error = "";
+            bool success = false;
+            for (int i = 0; i < 100; i++)
             {
-                // InitiateDefault is blocking. A better UI would show some type
-                // of status during this time, but it's not super important.
-                _service.InitiateDefault();
+                try
+                {
+                    // InitiateDefault is blocking. A better UI would show some type
+                    // of status during this time, but it's not super important.
+                    _service.InitiateDefault();
+                    success = true;
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    // Do nothing
+                    error = ex.Message;
+                }
             }
-            catch (Exception ex)
+            if(!success)
             {
                 MessageBox.Show(
-                    $"Unable to initialize bluetooth service. Exiting.\n{ex.Message}",
-                    "Fatal exception",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        $"Unable to initialize bluetooth service. Exiting.\n{error}",
+                        "Fatal exception",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
 
                 Environment.Exit(-1);
             }
@@ -95,16 +57,6 @@ namespace HeartRate
         {
             try
             {
-                if (_leaktest)
-                {
-                    for (var i = 0; i < 4000; ++i)
-                    {
-                        Service_HeartRateUpdatedCore(status, bpm);
-                    }
-
-                    return;
-                }
-
                 Service_HeartRateUpdatedCore(status, bpm);
             }
             catch (Exception ex)
@@ -123,99 +75,17 @@ namespace HeartRate
                 status == ContactSensorStatus.NoContact;
 
             var iconText = bpm.ToString();
-
-            var warnLevel = _settings.WarnLevel;
-            var alertLevel = _settings.AlertLevel;
             // <= 0 implies disabled.
-            var isWarn = warnLevel > 0 && bpm >= warnLevel;
-            var isAlert = alertLevel > 0 && bpm >= alertLevel;
+            var isWarn = bpm >= 40 && bpm < 180;
 
             lock (_updateSync)
             {
-                if (isDisconnected)
-                {
-                    uxBpmNotifyIcon.Text = $"Disconnected {status} ({bpm})";
-
-                    if (!_disconnectedTimeout.IsRunning)
-                    {
-                        _disconnectedTimeout.Start();
-                    }
-
-                    if (_disconnectedTimeout.Elapsed >
-                        _settings.DisconnectedTimeout)
-                    {
-                        // Originally this used " ⃠" (U+20E0, "Prohibition Symbol")
-                        // but MeasureString was only returning ~half of the
-                        // width.
-                        iconText = "X";
-                    }
-                }
-                else
-                {
-                    uxBpmNotifyIcon.Text = null;
-                    _disconnectedTimeout.Stop();
-                }
-
-                _iconGraphics.Clear(Color.Transparent);
-
-                var sizingMeasurement = _iconGraphics
-                    .MeasureString(iconText, _measurementFont);
-
-                var color = isWarn ? _settings.WarnColor : _settings.Color;
-
-                using (var brush = new SolidBrush(color))
-                using (var font = new Font(_settings.FontName,
-                    _iconHeight * (_iconWidth / sizingMeasurement.Width),
-                    GraphicsUnit.Pixel))
-                {
-                    _iconGraphics.DrawString(
-                        iconText, font, brush,
-                        new RectangleF(0, 0, _iconWidth, _iconHeight),
-                        _iconStringFormat);
-                }
-
-                _iconText = iconText;
-
+                var color = isWarn ? Color.Red : Color.Blue;
+                
                 Invoke(new Action(() => {
-                    uxBpmLabel.Text = _iconText;
-                    uxBpmLabel.ForeColor = isWarn
-                        ? _settings.UIWarnColor
-                        : _settings.UIColor;
-                    uxBpmLabel.BackColor = _settings.UIBackgroundColor;
-
-                    var font = _settings.UIFontName;
-
-                    if (uxBpmLabel.Font.FontFamily.Name != font)
-                    {
-                        UpdateLabelFont();
-                    }
+                    labelHR.Text = iconText;
+                    labelHR.ForeColor = color;
                 }));
-
-                var iconHandle = _iconBitmap.GetHicon();
-
-                using (var icon = Icon.FromHandle(iconHandle))
-                {
-                    uxBpmNotifyIcon.Icon = icon;
-
-                    if (isAlert && (!_alertTimeout.IsRunning ||
-                        _alertTimeout.Elapsed >= _settings.AlertTimeout))
-                    {
-                        _alertTimeout.Restart();
-
-                        var alertText = $"BPMs @ {bpm}";
-
-                        uxBpmNotifyIcon.ShowBalloonTip(
-                            (int)_settings.AlertTimeout.TotalMilliseconds,
-                            alertText, alertText, ToolTipIcon.Warning);
-                    }
-                }
-
-                if (_oldIconHandle != IntPtr.Zero)
-                {
-                    DestroyIcon(_oldIconHandle);
-                }
-
-                _oldIconHandle = iconHandle;
             }
         }
 
@@ -231,10 +101,6 @@ namespace HeartRate
                 lock (_disposeSync)
                 {
                     TryDispose(_service);
-                    TryDispose(_iconBitmap);
-                    TryDispose(_iconGraphics);
-                    TryDispose(_measurementFont);
-                    TryDispose(_iconStringFormat);
                 }
             }
 
@@ -255,70 +121,15 @@ namespace HeartRate
             catch { }
         }
 
-        private void uxBpmNotifyIcon_MouseClick(object sender, MouseEventArgs e)
-        {
-            if (e.Button == MouseButtons.Left)
-            {
-                Show();
-                SetForegroundWindow(Handle.ToInt32());
-            }
-        }
-
         private void HeartRateForm_FormClosing(object sender, FormClosingEventArgs e)
         {
             if (e.CloseReason == CloseReason.UserClosing)
             {
                 e.Cancel = true;
                 Hide();
+                Dispose(true);
             }
         }
 
-        private void HeartRateForm_ResizeEnd(object sender, EventArgs e)
-        {
-            UpdateLabelFont();
-        }
-
-        private void UpdateLabelFont()
-        {
-            lock (_updateSync)
-            {
-                var newFont = new Font(
-                    _settings.UIFontName, uxBpmLabel.Height,
-                    GraphicsUnit.Pixel);
-
-                uxBpmLabel.Font = newFont;
-                TryDispose(_lastFont);
-                _lastFont = newFont;
-            }
-        }
-
-        private void uxMenuEditSettings_Click(object sender, EventArgs e)
-        {
-            var thread = new Thread(() => {
-                using (var process = Process.Start(new ProcessStartInfo {
-                    FileName = HeartRateSettings.Filename,
-                    UseShellExecute = true,
-                    Verb = "EDIT"
-                }))
-                {
-                    process.WaitForExit();
-                }
-
-                lock (_updateSync)
-                {
-                    _settings.Load();
-                }
-            }) {
-                IsBackground = true,
-                Name = "Edit config"
-            };
-
-            thread.Start();
-        }
-
-        private void uxExitMenuItem_Click(object sender, EventArgs e)
-        {
-            Environment.Exit(0);
-        }
     }
 }

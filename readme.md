@@ -1,3 +1,13 @@
+Logging Fork
+============
+
+This fork takes the functionality of the original and modifies it:
+1. The application is changed to a windowed application
+2. The heart rate measurement service fields are completely recorded
+3. Logging of the heart rate service data to a csv file occurs automatically upon connection.
+
+This has been tested with a Polar H7 and a Polar H10
+
 Heart rate monitor
 ==================
 
